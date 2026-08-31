@@ -279,7 +279,7 @@ app.get("/webhook", (req, res) => {
 });
 
 
- Ruta para recibir mensajes de WhatsApp
+// Ruta para recibir mensajes de WhatsApp
 app.post("/webhook", (req, res) => {
   console.log("Mensaje recibido:");
   console.log(JSON.stringify(req.body, null, 2));
