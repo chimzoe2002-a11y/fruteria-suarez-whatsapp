@@ -4,7 +4,8 @@ const app = express();
 app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const SHEET_ID = "1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ";
 
 // ======================================================
@@ -228,7 +229,36 @@ async function buscarProducto(nombre) {
 
   return parciales;
 }
+async function enviarMensajeWhatsApp(numeroDestino, texto) {
+  const url =
+    `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
+  const respuesta = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: numeroDestino,
+      type: "text",
+      text: {
+        body: texto,
+      },
+    }),
+  });
+
+  const resultado = await respuesta.json();
+
+  if (!respuesta.ok) {
+    console.error("Error enviando WhatsApp:", resultado);
+    throw new Error("No se pudo enviar el mensaje de WhatsApp");
+  }
+
+  console.log("WhatsApp enviado correctamente:", resultado);
+  return resultado;
+}
 
 // ======================================================
 // WEBHOOK META
@@ -249,12 +279,78 @@ app.get("/webhook", (req, res) => {
 });
 
 
-// Ruta para recibir mensajes de WhatsApp
+ Ruta para recibir mensajes de WhatsApp
 app.post("/webhook", (req, res) => {
   console.log("Mensaje recibido:");
   console.log(JSON.stringify(req.body, null, 2));
 
+  // Respondemos inmediatamente a Meta
   res.sendStatus(200);
+
+  procesarMensajeWhatsApp(req.body).catch((error) => {
+    console.error("Error procesando mensaje:", error);
+  });
+});
+
+
+async function procesarMensajeWhatsApp(body) {
+  const mensaje =
+    body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+
+  // Algunos webhooks son solo actualizaciones de estado.
+  if (!mensaje) {
+    return;
+  }
+
+  // Por ahora solo procesamos mensajes de texto.
+  if (mensaje.type !== "text") {
+    console.log("Mensaje recibido, pero no es texto.");
+    return;
+  }
+
+  const numeroCliente = mensaje.from;
+  const textoCliente = mensaje.text?.body?.trim();
+
+  if (!textoCliente) {
+    return;
+  }
+
+  console.log(`Cliente ${numeroCliente}: ${textoCliente}`);
+
+  const resultados = await buscarProducto(textoCliente);
+
+  let respuesta;
+
+  if (resultados.length === 0) {
+    respuesta =
+      `Por ahora no encontré "${textoCliente}" en nuestra lista de precios.`;
+  } else if (resultados.length === 1) {
+    const producto = resultados[0];
+
+    if (producto.precio === null) {
+      respuesta =
+        `${producto.producto}: precio pendiente de actualizar.`;
+    } else {
+      respuesta =
+        `${producto.producto}: $${producto.precio} por ${producto.unidad}.`;
+    }
+  } else {
+    const opciones = resultados
+      .map((producto) => {
+        if (producto.precio === null) {
+          return `• ${producto.producto}: precio pendiente`;
+        }
+
+        return `• ${producto.producto}: $${producto.precio} por ${producto.unidad}`;
+      })
+      .join("\n");
+
+    respuesta =
+      `Encontré varias opciones:\n\n${opciones}\n\n¿Cuál necesitas?`;
+  }
+
+  await enviarMensajeWhatsApp(numeroCliente, respuesta);
+}
 });
 
 
