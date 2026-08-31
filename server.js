@@ -260,7 +260,33 @@ async function enviarMensajeWhatsApp(numeroDestino, texto) {
   console.log("WhatsApp enviado correctamente:", resultado);
   return resultado;
 }
+async function entenderMensajeConIA(textoCliente) {
+  const respuesta = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5.4",
+      instructions:
+        "Extrae únicamente el nombre del producto que el cliente está preguntando. Responde solo con el nombre del producto, sin explicación.",
+      input: textoCliente,
+    }),
+  });
 
+  const resultado = await respuesta.json();
+
+  if (!respuesta.ok) {
+    console.error("Error OpenAI:", resultado);
+    throw new Error("No se pudo interpretar el mensaje con IA");
+  }
+
+  const texto =
+    resultado.output?.[0]?.content?.[0]?.text?.trim();
+
+  return texto;
+}
 // ======================================================
 // WEBHOOK META
 // ======================================================
