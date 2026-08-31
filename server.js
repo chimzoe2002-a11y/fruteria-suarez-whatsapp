@@ -5,6 +5,235 @@ app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
+const SHEET_ID = "1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ";
+
+// ======================================================
+// GOOGLE SHEETS
+// ======================================================
+
+let catalogoCache = [];
+let ultimaActualizacionCatalogo = 0;
+
+// Durante esta primera prueba actualizamos como máximo cada 60 segundos.
+const CACHE_MS = 60 * 1000;
+
+
+// Quita acentos, mayúsculas y espacios extras.
+// Ejemplo:
+// "Limón Eureka" -> "limon eureka"
+function normalizarTexto(texto = "") {
+  return texto
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+
+// Convierte correctamente una línea CSV en columnas.
+function parsearLineaCSV(linea) {
+  const resultado = [];
+
+  let actual = "";
+  let dentroDeComillas = false;
+
+  for (let i = 0; i < linea.length; i++) {
+    const caracter = linea[i];
+
+    if (caracter === '"') {
+      if (dentroDeComillas && linea[i + 1] === '"') {
+        actual += '"';
+        i++;
+      } else {
+        dentroDeComillas = !dentroDeComillas;
+      }
+    } else if (caracter === "," && !dentroDeComillas) {
+      resultado.push(actual);
+      actual = "";
+    } else {
+      actual += caracter;
+    }
+  }
+
+  resultado.push(actual);
+
+  return resultado;
+}
+
+
+// Descarga una pestaña de Google Sheets.
+async function leerPestana(nombrePestana) {
+  const url =
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq` +
+    `?tqx=out:csv&sheet=${encodeURIComponent(nombrePestana)}`;
+
+  const respuesta = await fetch(url);
+
+  if (!respuesta.ok) {
+    throw new Error(
+      `No se pudo leer la pestaña ${nombrePestana}. Código: ${respuesta.status}`
+    );
+  }
+
+  const texto = await respuesta.text();
+
+  return texto
+    .split(/\r?\n/)
+    .filter((linea) => linea.trim() !== "")
+    .map(parsearLineaCSV);
+}
+
+
+// Tu hoja está acomodada así:
+//
+// Precio | Producto | Unidad
+// Precio | Producto | Unidad
+// Precio | Producto | Unidad
+// Precio | Producto | Unidad
+//
+// Por eso recorremos las columnas de 3 en 3.
+function convertirFilasAProductos(filas, categoria) {
+  const productos = [];
+
+  // Las primeras 3 filas contienen:
+  // título
+  // fecha
+  // encabezados
+  for (let filaIndex = 3; filaIndex < filas.length; filaIndex++) {
+    const fila = filas[filaIndex];
+
+    for (let columna = 0; columna < fila.length; columna += 3) {
+      const precioTexto = (fila[columna] || "").trim();
+      const producto = (fila[columna + 1] || "").trim();
+      const unidad = (fila[columna + 2] || "").trim();
+
+      if (!producto) {
+        continue;
+      }
+
+      let precio = null;
+
+      if (precioTexto !== "") {
+        const numero = Number(
+          precioTexto
+            .replace("$", "")
+            .replace(/,/g, "")
+            .trim()
+        );
+
+        if (!Number.isNaN(numero)) {
+          precio = numero;
+        }
+      }
+
+      productos.push({
+        producto,
+        precio,
+        unidad: unidad || "kg",
+        categoria,
+        nombreNormalizado: normalizarTexto(producto),
+      });
+    }
+  }
+
+  return productos;
+}
+
+
+// Carga Verdura + Fruta.
+async function cargarCatalogo() {
+  const ahora = Date.now();
+
+  if (
+    catalogoCache.length > 0 &&
+    ahora - ultimaActualizacionCatalogo < CACHE_MS
+  ) {
+    return catalogoCache;
+  }
+
+  console.log("Actualizando catálogo desde Google Sheets...");
+
+  const [verduraFilas, frutaFilas] = await Promise.all([
+    leerPestana("Verdura"),
+    leerPestana("Fruta"),
+  ]);
+
+  const productosVerdura = convertirFilasAProductos(
+    verduraFilas,
+    "verdura"
+  );
+
+  const productosFruta = convertirFilasAProductos(
+    frutaFilas,
+    "fruta"
+  );
+
+  const todos = [...productosVerdura, ...productosFruta];
+
+  // Quitamos duplicados exactos.
+  const mapa = new Map();
+
+  for (const producto of todos) {
+    const clave =
+      `${producto.nombreNormalizado}|${producto.precio}|${producto.unidad}`;
+
+    if (!mapa.has(clave)) {
+      mapa.set(clave, producto);
+    }
+  }
+
+  catalogoCache = Array.from(mapa.values());
+  ultimaActualizacionCatalogo = ahora;
+
+  console.log(
+    `Catálogo actualizado: ${catalogoCache.length} productos/presentaciones`
+  );
+
+  return catalogoCache;
+}
+
+
+// ======================================================
+// BUSCADOR DE PRODUCTOS
+// ======================================================
+
+async function buscarProducto(nombre) {
+  const catalogo = await cargarCatalogo();
+
+  const busqueda = normalizarTexto(nombre);
+
+  if (!busqueda) {
+    return [];
+  }
+
+  // Primero intentamos coincidencia exacta.
+  const exactos = catalogo.filter(
+    (producto) => producto.nombreNormalizado === busqueda
+  );
+
+  if (exactos.length > 0) {
+    return exactos;
+  }
+
+  // Si escriben solamente "kiwi",
+  // puede encontrar "kiwi verde" y "kiwi dorado".
+  const parciales = catalogo.filter((producto) => {
+    return (
+      producto.nombreNormalizado.includes(busqueda) ||
+      busqueda.includes(producto.nombreNormalizado)
+    );
+  });
+
+  return parciales;
+}
+
+
+// ======================================================
+// WEBHOOK META
+// ======================================================
+
 // Ruta para verificar el webhook con Meta
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -19,6 +248,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+
 // Ruta para recibir mensajes de WhatsApp
 app.post("/webhook", (req, res) => {
   console.log("Mensaje recibido:");
@@ -27,12 +257,75 @@ app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 });
 
-// Página principal
+
+// ======================================================
+// RUTAS DE PRUEBA
+// ======================================================
+
+// Ver todo el catálogo que Render está leyendo.
+app.get("/catalogo", async (req, res) => {
+  try {
+    const catalogo = await cargarCatalogo();
+
+    res.json({
+      total: catalogo.length,
+      productos: catalogo,
+    });
+  } catch (error) {
+    console.error("Error leyendo catálogo:", error);
+
+    res.status(500).json({
+      error: "No se pudo leer el catálogo",
+      detalle: error.message,
+    });
+  }
+});
+
+
+// Buscar un producto.
+// Ejemplo:
+// /buscar?producto=kiwi dorado
+app.get("/buscar", async (req, res) => {
+  try {
+    const nombre = req.query.producto;
+
+    if (!nombre) {
+      return res.status(400).json({
+        error: "Falta indicar ?producto=",
+      });
+    }
+
+    const resultados = await buscarProducto(nombre);
+
+    res.json({
+      busqueda: nombre,
+      cantidad: resultados.length,
+      resultados,
+    });
+  } catch (error) {
+    console.error("Error buscando producto:", error);
+
+    res.status(500).json({
+      error: "No se pudo buscar el producto",
+      detalle: error.message,
+    });
+  }
+});
+
+
+// ======================================================
+// PÁGINA PRINCIPAL
+// ======================================================
+
 app.get("/", (req, res) => {
   res.send("Frutería Suárez WhatsApp Bot funcionando");
 });
 
-// Política de privacidad
+
+// ======================================================
+// POLÍTICA DE PRIVACIDAD
+// ======================================================
+
 app.get("/privacidad", (req, res) => {
   res.send(`
     <html>
@@ -89,7 +382,11 @@ app.get("/privacidad", (req, res) => {
   `);
 });
 
-// Instrucciones para eliminación de datos
+
+// ======================================================
+// ELIMINACIÓN DE DATOS
+// ======================================================
+
 app.get("/eliminar-datos", (req, res) => {
   res.send(`
     <html>
@@ -122,7 +419,11 @@ app.get("/eliminar-datos", (req, res) => {
   `);
 });
 
-// Condiciones del servicio
+
+// ======================================================
+// CONDICIONES DEL SERVICIO
+// ======================================================
+
 app.get("/terminos", (req, res) => {
   res.send(`
     <html>
@@ -155,6 +456,11 @@ app.get("/terminos", (req, res) => {
     </html>
   `);
 });
+
+
+// ======================================================
+// SERVIDOR
+// ======================================================
 
 const PORT = process.env.PORT || 3000;
 
