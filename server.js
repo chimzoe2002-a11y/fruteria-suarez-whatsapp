@@ -344,7 +344,8 @@ async function procesarMensajeWhatsApp(body) {
 
   console.log(`Cliente ${numeroCliente}: ${textoCliente}`);
 
-  const resultados = await buscarProducto(textoCliente);
+  const productoDetectado = await entenderMensajeConIA(textoCliente);
+const resultados = await buscarProducto(productoDetectado);
 
   let respuesta;
 
