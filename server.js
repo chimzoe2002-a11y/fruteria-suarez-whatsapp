@@ -7,7 +7,33 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SHEET_ID = "1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ";
+const SHEET_ID = process.env.SHEET_ID;
+
+// ======================================================
+// CONTROL DE MENSAJES DUPLICADOS
+// ======================================================
+
+const mensajesProcesados = new Map();
+const MENSAJE_TTL_MS = 24 * 60 * 60 * 1000; // 24 horas
+
+function mensajeYaProcesado(messageId) {
+  const ahora = Date.now();
+
+  // Limpiamos entradas viejas de vez en cuando
+  for (const [id, timestamp] of mensajesProcesados.entries()) {
+    if (ahora - timestamp > MENSAJE_TTL_MS) {
+      mensajesProcesados.delete(id);
+    }
+  }
+
+  if (mensajesProcesados.has(messageId)) {
+    return true;
+  }
+
+  mensajesProcesados.set(messageId, ahora);
+  return false;
+}
+
 
 // ======================================================
 // GOOGLE SHEETS
@@ -16,13 +42,8 @@ const SHEET_ID = "1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ";
 let catalogoCache = [];
 let ultimaActualizacionCatalogo = 0;
 
-// Durante esta primera prueba actualizamos como máximo cada 60 segundos.
 const CACHE_MS = 60 * 1000;
 
-
-// Quita acentos, mayúsculas y espacios extras.
-// Ejemplo:
-// "Limón Eureka" -> "limon eureka"
 function normalizarTexto(texto = "") {
   return texto
     .toString()
@@ -33,8 +54,6 @@ function normalizarTexto(texto = "") {
     .replace(/\s+/g, " ");
 }
 
-
-// Convierte correctamente una línea CSV en columnas.
 function parsearLineaCSV(linea) {
   const resultado = [];
 
@@ -64,8 +83,6 @@ function parsearLineaCSV(linea) {
   return resultado;
 }
 
-
-// Descarga una pestaña de Google Sheets.
 async function leerPestana(nombrePestana) {
   const url =
     `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq` +
@@ -87,22 +104,9 @@ async function leerPestana(nombrePestana) {
     .map(parsearLineaCSV);
 }
 
-
-// Tu hoja está acomodada así:
-//
-// Precio | Producto | Unidad
-// Precio | Producto | Unidad
-// Precio | Producto | Unidad
-// Precio | Producto | Unidad
-//
-// Por eso recorremos las columnas de 3 en 3.
 function convertirFilasAProductos(filas, categoria) {
   const productos = [];
 
-  // Las primeras 3 filas contienen:
-  // título
-  // fecha
-  // encabezados
   for (let filaIndex = 3; filaIndex < filas.length; filaIndex++) {
     const fila = filas[filaIndex];
 
@@ -143,8 +147,6 @@ function convertirFilasAProductos(filas, categoria) {
   return productos;
 }
 
-
-// Carga Verdura + Fruta.
 async function cargarCatalogo() {
   const ahora = Date.now();
 
@@ -174,7 +176,6 @@ async function cargarCatalogo() {
 
   const todos = [...productosVerdura, ...productosFruta];
 
-  // Quitamos duplicados exactos.
   const mapa = new Map();
 
   for (const producto of todos) {
@@ -203,14 +204,12 @@ async function cargarCatalogo() {
 
 async function buscarProducto(nombre) {
   const catalogo = await cargarCatalogo();
-
   const busqueda = normalizarTexto(nombre);
 
   if (!busqueda) {
     return [];
   }
 
-  // Primero intentamos coincidencia exacta.
   const exactos = catalogo.filter(
     (producto) => producto.nombreNormalizado === busqueda
   );
@@ -219,17 +218,19 @@ async function buscarProducto(nombre) {
     return exactos;
   }
 
-  // Si escriben solamente "kiwi",
-  // puede encontrar "kiwi verde" y "kiwi dorado".
-  const parciales = catalogo.filter((producto) => {
+  return catalogo.filter((producto) => {
     return (
       producto.nombreNormalizado.includes(busqueda) ||
       busqueda.includes(producto.nombreNormalizado)
     );
   });
-
-  return parciales;
 }
+
+
+// ======================================================
+// WHATSAPP
+// ======================================================
+
 async function enviarMensajeWhatsApp(numeroDestino, texto) {
   const url =
     `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -258,8 +259,15 @@ async function enviarMensajeWhatsApp(numeroDestino, texto) {
   }
 
   console.log("WhatsApp enviado correctamente:", resultado);
+
   return resultado;
 }
+
+
+// ======================================================
+// OPENAI
+// ======================================================
+
 async function entenderMensajeConIA(textoCliente) {
   const respuesta = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -282,11 +290,9 @@ async function entenderMensajeConIA(textoCliente) {
     throw new Error("No se pudo interpretar el mensaje con IA");
   }
 
-  const texto =
-    resultado.output?.[0]?.content?.[0]?.text?.trim();
-
-  return texto;
+  return resultado.output?.[0]?.content?.[0]?.text?.trim();
 }
+
 async function generarRespuestaConIA(textoCliente, resultados) {
   const datosCatalogo = resultados.map((producto) => ({
     producto: producto.producto,
@@ -339,11 +345,12 @@ ${JSON.stringify(datosCatalogo)}
 
   return resultado.output?.[0]?.content?.[0]?.text?.trim();
 }
+
+
 // ======================================================
 // WEBHOOK META
 // ======================================================
 
-// Ruta para verificar el webhook con Meta
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -357,13 +364,10 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-
-// Ruta para recibir mensajes de WhatsApp
 app.post("/webhook", (req, res) => {
-  console.log("Mensaje recibido:");
-  console.log(JSON.stringify(req.body, null, 2));
+  console.log("Webhook recibido");
 
-  // Respondemos inmediatamente a Meta
+  // Contestamos inmediatamente a Meta
   res.sendStatus(200);
 
   procesarMensajeWhatsApp(req.body).catch((error) => {
@@ -371,19 +375,22 @@ app.post("/webhook", (req, res) => {
   });
 });
 
-
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-  // Algunos webhooks son solo actualizaciones de estado.
   if (!mensaje) {
     return;
   }
 
-  // Por ahora solo procesamos mensajes de texto.
+  // Evitar responder dos veces al mismo mensaje
+  if (mensaje.id && mensajeYaProcesado(mensaje.id)) {
+    console.log(`Mensaje duplicado ignorado: ${mensaje.id}`);
+    return;
+  }
+
   if (mensaje.type !== "text") {
-    console.log("Mensaje recibido, pero no es texto.");
+    console.log(`Mensaje ${mensaje.id} no es texto`);
     return;
   }
 
@@ -395,30 +402,82 @@ async function procesarMensajeWhatsApp(body) {
   }
 
   console.log(`Cliente ${numeroCliente}: ${textoCliente}`);
-const productoDetectado = await entenderMensajeConIA(textoCliente);
-const resultados = await buscarProducto(productoDetectado);
 
-let respuesta;
+  let respuestaCliente;
 
-if (resultados.length === 0) {
-  respuesta =
-    `Disculpa 😊 no encontré "${productoDetectado}" en nuestra lista de precios. ¿Buscas algún otro producto?`;
-} else {
-  respuesta = await generarRespuestaConIA(textoCliente, resultados);
+  try {
+    // ==================================================
+    // PRIMER INTENTO SIN IA
+    // ==================================================
+    //
+    // Si el cliente escribió directamente:
+    // "aguacate"
+    // "precio de aguacate"
+    //
+    // intentamos localizar productos usando el texto
+    // directamente antes de gastar una llamada a OpenAI.
+    //
+
+    let resultados = await buscarProducto(textoCliente);
+    let productoDetectado = textoCliente;
+
+    // ==================================================
+    // SI NO ENCONTRAMOS NADA, USAMOS IA
+    // ==================================================
+
+    if (resultados.length === 0) {
+      productoDetectado = await entenderMensajeConIA(textoCliente);
+
+      console.log(`Producto detectado por IA: ${productoDetectado}`);
+
+      resultados = await buscarProducto(productoDetectado);
+    }
+
+    // ==================================================
+    // RESPUESTA
+    // ==================================================
+
+    if (resultados.length === 0) {
+      respuestaCliente =
+        `Disculpa 😊 no encontré "${productoDetectado}" en nuestra lista de precios. ` +
+        `¿Buscas algún otro producto?`;
+    } else {
+      respuestaCliente = await generarRespuestaConIA(
+        textoCliente,
+        resultados
+      );
+    }
+
+  } catch (error) {
+    console.error(
+      `Error atendiendo a ${numeroCliente}:`,
+      error
+    );
+
+    respuestaCliente =
+      "Disculpa 😊 tuve un problema consultando nuestros precios. " +
+      "Intenta nuevamente en un momento o escríbenos el nombre del producto que buscas.";
+  }
+
+  // Aunque OpenAI o Sheets fallen, intentamos responder al cliente.
+  try {
+    await enviarMensajeWhatsApp(
+      numeroCliente,
+      respuestaCliente
+    );
+  } catch (error) {
+    console.error(
+      `No se pudo responder a ${numeroCliente}:`,
+      error
+    );
+  }
 }
-
-await enviarMensajeWhatsApp(numeroCliente, respuesta);
-}
-  
- 
-
 
 
 // ======================================================
 // RUTAS DE PRUEBA
 // ======================================================
 
-// Ver todo el catálogo que Render está leyendo.
 app.get("/catalogo", async (req, res) => {
   try {
     const catalogo = await cargarCatalogo();
@@ -437,10 +496,6 @@ app.get("/catalogo", async (req, res) => {
   }
 });
 
-
-// Buscar un producto.
-// Ejemplo:
-// /buscar?producto=kiwi dorado
 app.get("/buscar", async (req, res) => {
   try {
     const nombre = req.query.producto;
@@ -498,6 +553,7 @@ app.get("/privacidad", (req, res) => {
         </p>
 
         <h2>Información que podemos recibir</h2>
+
         <p>
           Cuando una persona se comunica con nosotros mediante WhatsApp,
           podemos recibir información como su número de teléfono, nombre
@@ -506,6 +562,7 @@ app.get("/privacidad", (req, res) => {
         </p>
 
         <h2>Uso de la información</h2>
+
         <p>
           La información se utiliza únicamente para gestionar pedidos,
           brindar atención al cliente, dar seguimiento a pagos y mejorar
@@ -513,6 +570,7 @@ app.get("/privacidad", (req, res) => {
         </p>
 
         <h2>Compartición de información</h2>
+
         <p>
           Frutería Suárez no vende la información personal de sus clientes.
           Los datos podrán ser procesados mediante proveedores tecnológicos
@@ -520,6 +578,7 @@ app.get("/privacidad", (req, res) => {
         </p>
 
         <h2>Eliminación de datos</h2>
+
         <p>
           Los usuarios pueden solicitar la eliminación de sus datos
           siguiendo las instrucciones disponibles en nuestra página de
@@ -527,6 +586,7 @@ app.get("/privacidad", (req, res) => {
         </p>
 
         <h2>Contacto</h2>
+
         <p>
           Para preguntas relacionadas con esta política, puedes comunicarte
           con Frutería Suárez mediante nuestros canales habituales de atención.
