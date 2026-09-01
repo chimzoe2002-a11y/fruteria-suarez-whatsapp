@@ -510,8 +510,30 @@ try {
     "Disculpa 😊 tuve un problema procesando tu mensaje. " +
     "Intenta nuevamente en un momento.";
 }
-    
+
+
+// ==================================================
+// ENVIAR RESPUESTA POR WHATSAPP
+// ==================================================
+
+try {
+  await enviarMensajeWhatsApp(
+    numeroCliente,
+    respuestaCliente
+  );
+} catch (error) {
+  console.error(
+    `No se pudo responder a ${numeroCliente}:`,
+    error
+  );
 }
+
+}
+
+
+// ======================================================
+// RUTAS DE PRUEBA
+// ======================================================
 
 
 // ======================================================
