@@ -474,7 +474,7 @@ if (intencion.tipo === "saludo") {
 else if (intencion.tipo === "lista_precios") {
   respuestaCliente =
     "¡Claro! 😊 Puedes consultar nuestra lista completa de precios aquí:\n" +
-    "TU_LINK_AQUI";
+    "https://docs.google.com/spreadsheets/d/1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ/edit?usp=sharing";
 }
 
 else if (intencion.tipo === "producto" && intencion.producto) {
