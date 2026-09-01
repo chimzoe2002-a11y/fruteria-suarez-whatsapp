@@ -277,8 +277,42 @@ async function entenderMensajeConIA(textoCliente) {
     },
     body: JSON.stringify({
       model: "gpt-5.4",
-      instructions:
-        "Extrae únicamente el nombre del producto que el cliente está preguntando. Responde solo con el nombre del producto, sin explicación.",
+
+      instructions: `
+Analiza el mensaje de un cliente de una frutería mexicana.
+
+Clasifica el mensaje en uno de estos tipos:
+
+- "saludo": saludos como hola, buenos días, buenas tardes, buenas noches.
+- "producto": cuando pregunta por un producto, precio, presentación o disponibilidad.
+- "otro": cualquier otro mensaje que no sea claramente una consulta de producto.
+
+Si es "producto", extrae únicamente el nombre del producto mencionado.
+
+Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
+
+{
+  "tipo": "saludo",
+  "producto": null
+}
+
+o:
+
+{
+  "tipo": "producto",
+  "producto": "aguacate"
+}
+
+o:
+
+{
+  "tipo": "otro",
+  "producto": null
+}
+
+No escribas ninguna explicación fuera del JSON.
+      `,
+
       input: textoCliente,
     }),
   });
@@ -290,7 +324,19 @@ async function entenderMensajeConIA(textoCliente) {
     throw new Error("No se pudo interpretar el mensaje con IA");
   }
 
-  return resultado.output?.[0]?.content?.[0]?.text?.trim();
+  const texto =
+    resultado.output?.[0]?.content?.[0]?.text?.trim();
+
+  try {
+    return JSON.parse(texto);
+  } catch (error) {
+    console.error("La IA no devolvió JSON válido:", texto);
+
+    return {
+      tipo: "otro",
+      producto: null,
+    };
+  }
 }
 
 async function generarRespuestaConIA(textoCliente, resultados) {
@@ -405,72 +451,66 @@ async function procesarMensajeWhatsApp(body) {
 
   let respuestaCliente;
 
-  try {
-    // ==================================================
-    // PRIMER INTENTO SIN IA
-    // ==================================================
-    //
-    // Si el cliente escribió directamente:
-    // "aguacate"
-    // "precio de aguacate"
-    //
-    // intentamos localizar productos usando el texto
-    // directamente antes de gastar una llamada a OpenAI.
-    //
+try {
+  // ==================================================
+  // PRIMERO ENTENDEMOS QUÉ QUIERE EL CLIENTE
+  // ==================================================
 
-    let resultados = await buscarProducto(textoCliente);
-    let productoDetectado = textoCliente;
+  const intencion = await entenderMensajeConIA(textoCliente);
 
-    // ==================================================
-    // SI NO ENCONTRAMOS NADA, USAMOS IA
-    // ==================================================
+  console.log("Intención detectada:", intencion);
 
-    if (resultados.length === 0) {
-      productoDetectado = await entenderMensajeConIA(textoCliente);
+  // ==================================================
+  // SALUDO
+  // ==================================================
 
-      console.log(`Producto detectado por IA: ${productoDetectado}`);
+  if (intencion.tipo === "saludo") {
+    respuestaCliente =
+      "¡Hola! 😊 Buenas noches. ¿En qué podemos ayudarte hoy?";
 
-      resultados = await buscarProducto(productoDetectado);
-    }
+  }
 
-    // ==================================================
-    // RESPUESTA
-    // ==================================================
+  // ==================================================
+  // CONSULTA DE PRODUCTO
+  // ==================================================
+
+  else if (intencion.tipo === "producto" && intencion.producto) {
+    const resultados = await buscarProducto(
+      intencion.producto
+    );
 
     if (resultados.length === 0) {
       respuestaCliente =
-        `Disculpa 😊 no encontré "${productoDetectado}" en nuestra lista de precios. ` +
-        `¿Buscas algún otro producto?`;
+        `Disculpa 😊 no encontré "${intencion.producto}" ` +
+        `en nuestra lista de precios. ¿Buscas algún otro producto?`;
     } else {
       respuestaCliente = await generarRespuestaConIA(
         textoCliente,
         resultados
       );
     }
+  }
 
-  } catch (error) {
-    console.error(
-      `Error atendiendo a ${numeroCliente}:`,
-      error
-    );
+  // ==================================================
+  // OTRO TIPO DE MENSAJE
+  // ==================================================
 
+  else {
     respuestaCliente =
-      "Disculpa 😊 tuve un problema consultando nuestros precios. " +
-      "Intenta nuevamente en un momento o escríbenos el nombre del producto que buscas.";
+      "Claro 😊 ¿Qué producto o precio te gustaría consultar?";
   }
 
-  // Aunque OpenAI o Sheets fallen, intentamos responder al cliente.
-  try {
-    await enviarMensajeWhatsApp(
-      numeroCliente,
-      respuestaCliente
-    );
-  } catch (error) {
-    console.error(
-      `No se pudo responder a ${numeroCliente}:`,
-      error
-    );
-  }
+} catch (error) {
+  console.error(
+    `Error atendiendo a ${numeroCliente}:`,
+    error
+  );
+
+  respuestaCliente =
+    "Disculpa 😊 tuve un problema procesando tu mensaje. " +
+    "Intenta nuevamente en un momento.";
+}
+    
 }
 
 
