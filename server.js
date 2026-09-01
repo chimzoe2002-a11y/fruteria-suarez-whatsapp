@@ -286,7 +286,6 @@ Clasifica el mensaje en uno de estos tipos:
 - "saludo": saludos como hola, buenos días, buenas tardes, buenas noches.
 - "producto": cuando pregunta por un producto, precio, presentación o disponibilidad.
 - "otro": cualquier otro mensaje que no sea claramente una consulta de producto.
-
 Si es "producto", extrae únicamente el nombre del producto mencionado.
 
 Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
@@ -307,6 +306,13 @@ o:
 
 {
   "tipo": "otro",
+  "producto": null
+}
+
+o:
+
+{
+  "tipo": "lista_precios",
   "producto": null
 }
 
@@ -460,36 +466,33 @@ try {
 
   console.log("Intención detectada:", intencion);
 
-  // ==================================================
-  // SALUDO
-  // ==================================================
+if (intencion.tipo === "saludo") {
+  respuestaCliente =
+    "¡Hola! 😊 ¿En qué podemos ayudarte?";
+}
 
-  if (intencion.tipo === "saludo") {
+else if (intencion.tipo === "lista_precios") {
+  respuestaCliente =
+    "¡Claro! 😊 Puedes consultar nuestra lista completa de precios aquí:\n" +
+    "TU_LINK_AQUI";
+}
+
+else if (intencion.tipo === "producto" && intencion.producto) {
+  const resultados = await buscarProducto(
+    intencion.producto
+  );
+
+  if (resultados.length === 0) {
     respuestaCliente =
-      "¡Hola! 😊 Buenas noches. ¿En qué podemos ayudarte hoy?";
-
-  }
-
-  // ==================================================
-  // CONSULTA DE PRODUCTO
-  // ==================================================
-
-  else if (intencion.tipo === "producto" && intencion.producto) {
-    const resultados = await buscarProducto(
-      intencion.producto
+      `Disculpa 😊 no encontré "${intencion.producto}" ` +
+      `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+  } else {
+    respuestaCliente = await generarRespuestaConIA(
+      textoCliente,
+      resultados
     );
-
-    if (resultados.length === 0) {
-      respuestaCliente =
-        `Disculpa 😊 no encontré "${intencion.producto}" ` +
-        `en nuestra lista de precios. ¿Buscas algún otro producto?`;
-    } else {
-      respuestaCliente = await generarRespuestaConIA(
-        textoCliente,
-        resultados
-      );
-    }
   }
+}
 
   // ==================================================
   // OTRO TIPO DE MENSAJE
