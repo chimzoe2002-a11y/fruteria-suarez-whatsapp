@@ -8,6 +8,8 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
 // ======================================================
 // CONTROL DE MENSAJES DUPLICADOS
@@ -763,7 +765,45 @@ app.get("/terminos", (req, res) => {
 // ======================================================
 
 const PORT = process.env.PORT || 3000;
+app.get("/supabase-test", async (req, res) => {
+  try {
+    const respuesta = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp?select=id,telefono,control_actual&limit=1`,
+      {
+        headers: {
+          apikey: SUPABASE_SECRET_KEY,
+          Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+        },
+      }
+    );
 
+    if (!respuesta.ok) {
+      const error = await respuesta.text();
+
+      console.error("Error Supabase:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error,
+      });
+    }
+
+    const datos = await respuesta.json();
+
+    res.json({
+      ok: true,
+      mensaje: "Render conectado correctamente con Supabase",
+      registros_encontrados: datos.length,
+    });
+  } catch (error) {
+    console.error("Error conectando con Supabase:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Servidor funcionando en puerto ${PORT}`);
 });
