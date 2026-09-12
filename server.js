@@ -114,6 +114,45 @@ async function actualizarActividadConversacion(
 }
 
 async function guardarMensajeWhatsApp({
+  async function obtenerHistorialReciente(conversacionId, limite = 20) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/mensajes_whatsapp` +
+    `?conversacion_id=eq.${conversacionId}` +
+    `&select=emisor,contenido,created_at` +
+    `&order=created_at.desc` +
+    `&limit=${limite}`;
+
+  const respuesta = await fetch(url, {
+    headers: headersSupabase(),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error obteniendo historial: ${detalle}`);
+  }
+
+  const mensajes = await respuesta.json();
+
+  // Supabase los entrega del más nuevo al más viejo.
+  // Los regresamos en orden cronológico.
+  return mensajes.reverse();
+}
+
+function convertirHistorialATexto(historial = []) {
+  return historial
+    .map((mensaje) => {
+      let nombre = "Cliente";
+
+      if (mensaje.emisor === "bot") {
+        nombre = "Asistente";
+      } else if (mensaje.emisor === "humano") {
+        nombre = "Empleado";
+      }
+
+      return `${nombre}: ${mensaje.contenido}`;
+    })
+    .join("\n");
+}
   conversacionId,
   telefono,
   messageId = null,
