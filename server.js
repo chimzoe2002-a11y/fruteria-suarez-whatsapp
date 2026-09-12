@@ -114,7 +114,43 @@ async function actualizarActividadConversacion(
 }
 
 async function guardarMensajeWhatsApp({
-  async function obtenerHistorialReciente(conversacionId, limite = 20) {
+  conversacionId,
+  telefono,
+  messageId = null,
+  emisor,
+  contenido,
+  origen = "whatsapp",
+}) {
+  const url = messageId
+    ? `${SUPABASE_URL}/rest/v1/mensajes_whatsapp?on_conflict=message_id`
+    : `${SUPABASE_URL}/rest/v1/mensajes_whatsapp`;
+
+  const prefer = messageId
+    ? "resolution=ignore-duplicates,return=minimal"
+    : "return=minimal";
+
+  const respuesta = await fetch(url, {
+    method: "POST",
+    headers: headersSupabase({
+      Prefer: prefer,
+    }),
+    body: JSON.stringify({
+      conversacion_id: conversacionId,
+      telefono,
+      message_id: messageId,
+      emisor,
+      contenido,
+      tipo_mensaje: "texto",
+      origen,
+    }),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error guardando mensaje: ${detalle}`);
+  }
+}
+    async function obtenerHistorialReciente(conversacionId, limite = 20) {
   const url =
     `${SUPABASE_URL}/rest/v1/mensajes_whatsapp` +
     `?conversacion_id=eq.${conversacionId}` +
@@ -152,42 +188,6 @@ function convertirHistorialATexto(historial = []) {
       return `${nombre}: ${mensaje.contenido}`;
     })
     .join("\n");
-}
-  conversacionId,
-  telefono,
-  messageId = null,
-  emisor,
-  contenido,
-  origen = "whatsapp",
-}) {
-  const url = messageId
-    ? `${SUPABASE_URL}/rest/v1/mensajes_whatsapp?on_conflict=message_id`
-    : `${SUPABASE_URL}/rest/v1/mensajes_whatsapp`;
-
-  const prefer = messageId
-    ? "resolution=ignore-duplicates,return=minimal"
-    : "return=minimal";
-
-  const respuesta = await fetch(url, {
-    method: "POST",
-    headers: headersSupabase({
-      Prefer: prefer,
-    }),
-    body: JSON.stringify({
-      conversacion_id: conversacionId,
-      telefono,
-      message_id: messageId,
-      emisor,
-      contenido,
-      tipo_mensaje: "texto",
-      origen,
-    }),
-  });
-
-  if (!respuesta.ok) {
-    const detalle = await respuesta.text();
-    throw new Error(`Error guardando mensaje: ${detalle}`);
-  }
 }
 
 // ======================================================
