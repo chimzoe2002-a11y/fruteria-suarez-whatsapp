@@ -10,6 +10,146 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+// ======================================================
+// SUPABASE
+// ======================================================
+
+function headersSupabase(extra = {}) {
+  return {
+    apikey: SUPABASE_SECRET_KEY,
+    Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+    "Content-Type": "application/json",
+    ...extra,
+  };
+}
+
+async function buscarConversacionWhatsApp(telefono) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp` +
+    `?telefono=eq.${encodeURIComponent(telefono)}` +
+    `&select=id,telefono,id_cliente,control_actual,motivo_handoff` +
+    `&limit=1`;
+
+  const respuesta = await fetch(url, {
+    headers: headersSupabase(),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error buscando conversación: ${detalle}`);
+  }
+
+  const datos = await respuesta.json();
+
+  return datos[0] || null;
+}
+
+async function crearConversacionWhatsApp(telefono) {
+  const respuesta = await fetch(
+    `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp`,
+    {
+      method: "POST",
+      headers: headersSupabase({
+        Prefer: "return=representation",
+      }),
+      body: JSON.stringify({
+        telefono,
+        control_actual: "bot",
+        ultimo_mensaje_at: new Date().toISOString(),
+      }),
+    }
+  );
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+
+    // Puede ocurrir si dos mensajes crean la conversación al mismo tiempo.
+    // En ese caso intentamos encontrarla nuevamente.
+    if (respuesta.status === 409) {
+      const existente = await buscarConversacionWhatsApp(telefono);
+
+      if (existente) {
+        return existente;
+      }
+    }
+
+    throw new Error(`Error creando conversación: ${detalle}`);
+  }
+
+  const datos = await respuesta.json();
+
+  return datos[0];
+}
+
+async function obtenerOCrearConversacionWhatsApp(telefono) {
+  let conversacion = await buscarConversacionWhatsApp(telefono);
+
+  if (!conversacion) {
+    conversacion = await crearConversacionWhatsApp(telefono);
+  }
+
+  return conversacion;
+}
+
+async function actualizarActividadConversacion(
+  conversacionId,
+  fecha = new Date().toISOString()
+) {
+  const respuesta = await fetch(
+    `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp?id=eq.${conversacionId}`,
+    {
+      method: "PATCH",
+      headers: headersSupabase(),
+      body: JSON.stringify({
+        updated_at: fecha,
+        ultimo_mensaje_at: fecha,
+      }),
+    }
+  );
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error actualizando conversación: ${detalle}`);
+  }
+}
+
+async function guardarMensajeWhatsApp({
+  conversacionId,
+  telefono,
+  messageId = null,
+  emisor,
+  contenido,
+  origen = "whatsapp",
+}) {
+  const url = messageId
+    ? `${SUPABASE_URL}/rest/v1/mensajes_whatsapp?on_conflict=message_id`
+    : `${SUPABASE_URL}/rest/v1/mensajes_whatsapp`;
+
+  const prefer = messageId
+    ? "resolution=ignore-duplicates,return=minimal"
+    : "return=minimal";
+
+  const respuesta = await fetch(url, {
+    method: "POST",
+    headers: headersSupabase({
+      Prefer: prefer,
+    }),
+    body: JSON.stringify({
+      conversacion_id: conversacionId,
+      telefono,
+      message_id: messageId,
+      emisor,
+      contenido,
+      tipo_mensaje: "texto",
+      origen,
+    }),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error guardando mensaje: ${detalle}`);
+  }
+}
 
 // ======================================================
 // CONTROL DE MENSAJES DUPLICADOS
@@ -456,7 +596,7 @@ async function procesarMensajeWhatsApp(body) {
     return;
   }
 
-  // Evitar responder dos veces al mismo mensaje
+  // Evitar procesar dos veces el mismo webhook durante esta ejecución
   if (mensaje.id && mensajeYaProcesado(mensaje.id)) {
     console.log(`Mensaje duplicado ignorado: ${mensaje.id}`);
     return;
@@ -476,82 +616,182 @@ async function procesarMensajeWhatsApp(body) {
 
   console.log(`Cliente ${numeroCliente}: ${textoCliente}`);
 
+  // ==================================================
+  // SUPABASE: CONVERSACIÓN + MENSAJE DEL CLIENTE
+  // ==================================================
+
+  let conversacion;
+
+  try {
+    conversacion =
+      await obtenerOCrearConversacionWhatsApp(numeroCliente);
+
+    await guardarMensajeWhatsApp({
+      conversacionId: conversacion.id,
+      telefono: numeroCliente,
+      messageId: mensaje.id || null,
+      emisor: "cliente",
+      contenido: textoCliente,
+      origen: "whatsapp",
+    });
+
+    await actualizarActividadConversacion(conversacion.id);
+
+  } catch (error) {
+    console.error(
+      `Error guardando conversación de ${numeroCliente}:`,
+      error
+    );
+
+    // Por seguridad no detenemos todo el bot si Supabase falla.
+    // El cliente todavía puede recibir respuesta.
+  }
+
+
+  // ==================================================
+  // ¿QUIÉN TIENE EL CONTROL?
+  // ==================================================
+
+  if (conversacion?.control_actual === "humano") {
+    console.log(
+      `Conversación ${conversacion.id} está en modo humano. ` +
+      `El bot no responderá a ${numeroCliente}.`
+    );
+
+    return;
+  }
+
+
+  // ==================================================
+  // RESPUESTA DEL BOT
+  // ==================================================
+
   let respuestaCliente;
 
-try {
-  // ==================================================
-  // PRIMERO ENTENDEMOS QUÉ QUIERE EL CLIENTE
-  // ==================================================
+  try {
+    const intencion = await entenderMensajeConIA(textoCliente);
 
-  const intencion = await entenderMensajeConIA(textoCliente);
+    console.log("Intención detectada:", intencion);
 
-  console.log("Intención detectada:", intencion);
 
-if (intencion.tipo === "saludo") {
-  respuestaCliente =
-    "¡Hola! 😊 ¿En qué podemos ayudarte?";
-}
+    if (intencion.tipo === "saludo") {
 
-else if (intencion.tipo === "lista_precios") {
-  respuestaCliente =
-    "¡Claro! 😊 Puedes consultar nuestra lista completa de precios aquí:\n" +
-    "https://docs.google.com/spreadsheets/d/1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ/edit?usp=sharing";
-}
+      respuestaCliente =
+        "¡Hola! 😊 ¿En qué podemos ayudarte?";
 
-else if (intencion.tipo === "producto" && intencion.producto) {
-  const resultados = await buscarProducto(
-    intencion.producto
-  );
+    }
 
-  if (resultados.length === 0) {
-    respuestaCliente =
-      `Disculpa 😊 no encontré "${intencion.producto}" ` +
-      `en nuestra lista de precios. ¿Buscas algún otro producto?`;
-  } else {
-    respuestaCliente = await generarRespuestaConIA(
-      textoCliente,
-      resultados
+    else if (intencion.tipo === "lista_precios") {
+
+      respuestaCliente =
+        "¡Claro! 😊 Puedes consultar nuestra lista completa de precios aquí:\n" +
+        "https://docs.google.com/spreadsheets/d/1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ/edit?usp=sharing";
+
+    }
+
+    else if (
+      intencion.tipo === "producto" &&
+      intencion.producto
+    ) {
+
+      const resultados =
+        await buscarProducto(intencion.producto);
+
+      if (resultados.length === 0) {
+
+        respuestaCliente =
+          `Disculpa 😊 no encontré "${intencion.producto}" ` +
+          `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+
+      } else {
+
+        respuestaCliente =
+          await generarRespuestaConIA(
+            textoCliente,
+            resultados
+          );
+
+      }
+
+    }
+
+    else {
+
+      respuestaCliente =
+        "Claro 😊 ¿Qué producto o precio te gustaría consultar?";
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      `Error atendiendo a ${numeroCliente}:`,
+      error
     );
-  }
-}
 
-  // ==================================================
-  // OTRO TIPO DE MENSAJE
-  // ==================================================
-
-  else {
     respuestaCliente =
-      "Claro 😊 ¿Qué producto o precio te gustaría consultar?";
+      "Disculpa 😊 tuve un problema procesando tu mensaje. " +
+      "Intenta nuevamente en un momento.";
+
   }
 
-} catch (error) {
-  console.error(
-    `Error atendiendo a ${numeroCliente}:`,
-    error
-  );
 
-  respuestaCliente =
-    "Disculpa 😊 tuve un problema procesando tu mensaje. " +
-    "Intenta nuevamente en un momento.";
-}
+  // ==================================================
+  // ENVIAR RESPUESTA POR WHATSAPP
+  // ==================================================
+
+  try {
+
+    const resultadoEnvio =
+      await enviarMensajeWhatsApp(
+        numeroCliente,
+        respuestaCliente
+      );
+
+    const messageIdBot =
+      resultadoEnvio?.messages?.[0]?.id || null;
 
 
-// ==================================================
-// ENVIAR RESPUESTA POR WHATSAPP
-// ==================================================
+    // ==================================================
+    // GUARDAR RESPUESTA DEL BOT EN SUPABASE
+    // ==================================================
 
-try {
-  await enviarMensajeWhatsApp(
-    numeroCliente,
-    respuestaCliente
-  );
-} catch (error) {
-  console.error(
-    `No se pudo responder a ${numeroCliente}:`,
-    error
-  );
-}
+    if (conversacion) {
 
+      try {
+
+        await guardarMensajeWhatsApp({
+          conversacionId: conversacion.id,
+          telefono: numeroCliente,
+          messageId: messageIdBot,
+          emisor: "bot",
+          contenido: respuestaCliente,
+          origen: "whatsapp",
+        });
+
+        await actualizarActividadConversacion(
+          conversacion.id
+        );
+
+      } catch (error) {
+
+        console.error(
+          `No se pudo guardar respuesta del bot en Supabase:`,
+          error
+        );
+
+      }
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      `No se pudo responder a ${numeroCliente}:`,
+      error
+    );
+
+  }
 }
 
 
