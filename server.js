@@ -615,9 +615,19 @@ app.get("/webhook", (req, res) => {
 
   return res.sendStatus(403);
 });
-procesarMensajeWhatsApp(req.body).catch((error) => {
-  console.error("Error procesando mensaje:", error);
+
+
+app.post("/webhook", (req, res) => {
+  console.log("Webhook recibido");
+
+  // Contestamos inmediatamente a Meta
+  res.sendStatus(200);
+
+  procesarMensajeWhatsApp(req.body).catch((error) => {
+    console.error("Error procesando mensaje:", error);
+  });
 });
+
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
