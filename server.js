@@ -1366,6 +1366,72 @@ app.get("/supabase-test", async (req, res) => {
     });
   }
 });
+app.get("/devolver-al-bot-test", async (req, res) => {
+  try {
+    const telefono = req.query.telefono;
+
+    if (!telefono) {
+      return res.status(400).json({
+        ok: false,
+        error: "Falta ?telefono=",
+      });
+    }
+
+    const conversacion =
+      await buscarConversacionWhatsApp(telefono);
+
+    if (!conversacion) {
+      return res.status(404).json({
+        ok: false,
+        error: "Conversación no encontrada",
+      });
+    }
+
+    // Devolver el control al bot
+    const respuestaCambio = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp?id=eq.${conversacion.id}`,
+      {
+        method: "PATCH",
+        headers: headersSupabase(),
+        body: JSON.stringify({
+          control_actual: "bot",
+          motivo_handoff: null,
+          tomado_por: null,
+          tomado_at: null,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (!respuestaCambio.ok) {
+      const detalle = await respuestaCambio.text();
+      throw new Error(
+        `No se pudo devolver control al bot: ${detalle}`
+      );
+    }
+
+    conversacion.control_actual = "bot";
+
+    // Revisar y contestar lo pendiente
+    const resultado =
+      await responderPendientesAlRetomar(conversacion);
+
+    return res.json({
+      ok: true,
+      telefono,
+      control_actual: "bot",
+      resultado,
+    });
+
+  } catch (error) {
+    console.error("Error retomando conversación:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Servidor funcionando en puerto ${PORT}`);
 });
