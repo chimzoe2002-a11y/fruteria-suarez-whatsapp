@@ -189,7 +189,48 @@ function convertirHistorialATexto(historial = []) {
     })
     .join("\n");
 }
+async function obtenerMensajesPendientes(conversacionId) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/mensajes_whatsapp` +
+    `?conversacion_id=eq.${conversacionId}` +
+    `&emisor=eq.cliente` +
+    `&atendido=eq.false` +
+    `&select=id,contenido,created_at` +
+    `&order=created_at.asc`;
 
+  const respuesta = await fetch(url, {
+    headers: headersSupabase(),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error obteniendo pendientes: ${detalle}`);
+  }
+
+  return await respuesta.json();
+}
+
+
+async function marcarMensajesPendientesComoAtendidos(conversacionId) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/mensajes_whatsapp` +
+    `?conversacion_id=eq.${conversacionId}` +
+    `&emisor=eq.cliente` +
+    `&atendido=eq.false`;
+
+  const respuesta = await fetch(url, {
+    method: "PATCH",
+    headers: headersSupabase(),
+    body: JSON.stringify({
+      atendido: true,
+    }),
+  });
+
+  if (!respuesta.ok) {
+    const detalle = await respuesta.text();
+    throw new Error(`Error marcando pendientes: ${detalle}`);
+  }
+}
 // ======================================================
 // CONTROL DE MENSAJES DUPLICADOS
 // ======================================================
@@ -666,16 +707,22 @@ async function procesarMensajeWhatsApp(body) {
     conversacion =
       await obtenerOCrearConversacionWhatsApp(numeroCliente);
 
-    await guardarMensajeWhatsApp({
-      conversacionId: conversacion.id,
-      telefono: numeroCliente,
-      messageId: mensaje.id || null,
-      emisor: "cliente",
-      contenido: textoCliente,
-      origen: "whatsapp",
-    });
+await guardarMensajeWhatsApp({
+  conversacionId: conversacion.id,
+  telefono: numeroCliente,
+  messageId: messageIdBot,
+  emisor: "bot",
+  contenido: respuestaCliente,
+  origen: "whatsapp",
+});
 
-    await actualizarActividadConversacion(conversacion.id);
+await marcarMensajesPendientesComoAtendidos(
+  conversacion.id
+);
+
+await actualizarActividadConversacion(
+  conversacion.id
+);
 
   } catch (error) {
     console.error(
@@ -934,8 +981,201 @@ app.get("/buscar", async (req, res) => {
     });
   }
 });
+async function responderPendientesAlRetomar(conversacion) {
+  const pendientes =
+    await obtenerMensajesPendientes(conversacion.id);
 
+  if (pendientes.length === 0) {
+    console.log(
+      `Conversación ${conversacion.id}: no hay mensajes pendientes`
+    );
 
+    return {
+      respondio: false,
+      motivo: "sin_pendientes",
+    };
+  }
+
+  const historial =
+    await obtenerHistorialReciente(
+      conversacion.id,
+      20
+    );
+
+  const historialTexto =
+    convertirHistorialATexto(historial);
+
+  const mensajesPendientesTexto =
+    pendientes
+      .map((m) => m.contenido)
+      .join("\n");
+
+  const textoConContexto = `
+HISTORIAL RECIENTE:
+
+${historialTexto}
+
+MENSAJES DEL CLIENTE QUE QUEDARON SIN RESPUESTA:
+
+${mensajesPendientesTexto}
+
+INSTRUCCIONES:
+- Retoma la conversación como asistente de Frutería Suárez.
+- Los mensajes anteriores quedaron sin respuesta durante una intervención humana.
+- Responde ahora lo que quedó pendiente.
+- Usa el historial para comprender referencias.
+- No menciones que hubo un error técnico ni que estás leyendo una base de datos.
+`;
+
+  const intencion =
+    await entenderMensajeConIA(textoConContexto);
+
+  let respuestaCliente;
+
+  if (intencion.tipo === "saludo") {
+
+    respuestaCliente =
+      "¡Hola! 😊 ¿En qué podemos ayudarte?";
+
+  } else if (intencion.tipo === "lista_precios") {
+
+    respuestaCliente =
+      "¡Claro! 😊 Puedes consultar nuestra lista completa de precios aquí:\n" +
+      "https://docs.google.com/spreadsheets/d/1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ/edit?usp=sharing";
+
+  } else if (
+    intencion.tipo === "producto" &&
+    intencion.producto
+  ) {
+
+    const resultados =
+      await buscarProducto(intencion.producto);
+
+    if (resultados.length === 0) {
+
+      respuestaCliente =
+        `Disculpa 😊 no encontré "${intencion.producto}" ` +
+        `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+
+    } else {
+
+      respuestaCliente =
+        await generarRespuestaConIA(
+          textoConContexto,
+          resultados
+        );
+
+    }
+
+  } else {
+
+    respuestaCliente =
+      "Claro 😊, retomando tu mensaje anterior, ¿me puedes dar un poco más de detalle para ayudarte?";
+
+  }
+
+  const resultadoEnvio =
+    await enviarMensajeWhatsApp(
+      conversacion.telefono,
+      respuestaCliente
+    );
+
+  const messageIdBot =
+    resultadoEnvio?.messages?.[0]?.id || null;
+
+  await guardarMensajeWhatsApp({
+    conversacionId: conversacion.id,
+    telefono: conversacion.telefono,
+    messageId: messageIdBot,
+    emisor: "bot",
+    contenido: respuestaCliente,
+    origen: "retomar_handoff",
+  });
+
+  await marcarMensajesPendientesComoAtendidos(
+    conversacion.id
+  );
+
+  await actualizarActividadConversacion(
+    conversacion.id
+  );
+
+  return {
+    respondio: true,
+    cantidadPendientes: pendientes.length,
+  };
+}
+app.post("/devolver-al-bot", async (req, res) => {
+  try {
+    const telefono = req.body?.telefono;
+
+    if (!telefono) {
+      return res.status(400).json({
+        ok: false,
+        error: "Falta telefono",
+      });
+    }
+
+    const conversacion =
+      await buscarConversacionWhatsApp(telefono);
+
+    if (!conversacion) {
+      return res.status(404).json({
+        ok: false,
+        error: "Conversación no encontrada",
+      });
+    }
+
+    // 1. Devolver control al bot
+    const respuestaCambio = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversaciones_whatsapp?id=eq.${conversacion.id}`,
+      {
+        method: "PATCH",
+        headers: headersSupabase(),
+        body: JSON.stringify({
+          control_actual: "bot",
+          motivo_handoff: null,
+          tomado_por: null,
+          tomado_at: null,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (!respuestaCambio.ok) {
+      const detalle = await respuestaCambio.text();
+
+      throw new Error(
+        `No se pudo devolver control al bot: ${detalle}`
+      );
+    }
+
+    // 2. Actualizar objeto local
+    conversacion.control_actual = "bot";
+
+    // 3. Revisar si quedó algo sin contestar
+    const resultadoPendientes =
+      await responderPendientesAlRetomar(conversacion);
+
+    return res.json({
+      ok: true,
+      telefono,
+      control_actual: "bot",
+      pendientes: resultadoPendientes,
+    });
+
+  } catch (error) {
+    console.error(
+      "Error devolviendo conversación al bot:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
 // ======================================================
 // PÁGINA PRINCIPAL
 // ======================================================
