@@ -622,11 +622,6 @@ app.post("/webhook", (req, res) => {
   // Contestamos inmediatamente a Meta
   res.sendStatus(200);
 
-  procesarMensajeWhatsApp(req.body).catch((error) => {
-    console.error("Error procesando mensaje:", error);
-  });
-});
-
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
@@ -681,9 +676,6 @@ async function procesarMensajeWhatsApp(body) {
       `Error guardando conversación de ${numeroCliente}:`,
       error
     );
-
-    // Por seguridad no detenemos todo el bot si Supabase falla.
-    // El cliente todavía puede recibir respuesta.
   }
 
 
@@ -702,13 +694,68 @@ async function procesarMensajeWhatsApp(body) {
 
 
   // ==================================================
+  // RECUPERAR CONTEXTO DE LA CONVERSACIÓN
+  // ==================================================
+
+  let historialTexto = "";
+
+  if (conversacion) {
+    try {
+      const historial =
+        await obtenerHistorialReciente(
+          conversacion.id,
+          20
+        );
+
+      historialTexto =
+        convertirHistorialATexto(historial);
+
+      console.log(
+        `Historial recuperado para ${numeroCliente}:\n` +
+        historialTexto
+      );
+
+    } catch (error) {
+      console.error(
+        `No se pudo recuperar historial de ${numeroCliente}:`,
+        error
+      );
+    }
+  }
+
+
+  // ==================================================
+  // TEXTO QUE RECIBIRÁ LA IA
+  // ==================================================
+
+  const textoConContexto = `
+HISTORIAL RECIENTE DE LA CONVERSACIÓN:
+
+${historialTexto || "No hay historial previo disponible."}
+
+MENSAJE ACTUAL DEL CLIENTE:
+
+${textoCliente}
+
+INSTRUCCIONES:
+- Interpreta principalmente el MENSAJE ACTUAL.
+- Usa el historial solamente para entender referencias o contexto.
+- Si el cliente dice cosas como "ese", "lo mismo", "¿y cuánto?", "¿entonces?",
+  "dame 3 kilos", etc., usa el historial para saber a qué producto se refiere.
+- Los mensajes marcados como "Empleado" fueron escritos por una persona
+  que tomó temporalmente la conversación.
+`;
+
+
+  // ==================================================
   // RESPUESTA DEL BOT
   // ==================================================
 
   let respuestaCliente;
 
   try {
-    const intencion = await entenderMensajeConIA(textoCliente);
+    const intencion =
+      await entenderMensajeConIA(textoConContexto);
 
     console.log("Intención detectada:", intencion);
 
@@ -746,7 +793,7 @@ async function procesarMensajeWhatsApp(body) {
 
         respuestaCliente =
           await generarRespuestaConIA(
-            textoCliente,
+            textoConContexto,
             resultados
           );
 
@@ -832,12 +879,6 @@ async function procesarMensajeWhatsApp(body) {
 
   }
 }
-
-
-// ======================================================
-// RUTAS DE PRUEBA
-// ======================================================
-
 
 // ======================================================
 // RUTAS DE PRUEBA
