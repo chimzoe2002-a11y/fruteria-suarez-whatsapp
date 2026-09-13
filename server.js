@@ -621,7 +621,7 @@ app.post("/webhook", (req, res) => {
 
   // Contestamos inmediatamente a Meta
   res.sendStatus(200);
-
+}
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
