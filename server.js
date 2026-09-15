@@ -503,39 +503,65 @@ async function entenderMensajeConIA(textoCliente) {
       instructions: `
 Analiza el mensaje de un cliente de una frutería mexicana.
 
-Clasifica el mensaje en uno de estos tipos:
+Clasifica el mensaje en UNO de estos tipos:
 
-- "saludo": saludos como hola, buenos días, buenas tardes, buenas noches.
-- "producto": cuando pregunta por un producto, precio, presentación o disponibilidad.
-- "otro": cualquier otro mensaje que no sea claramente una consulta de producto.
-Si es "producto", extrae únicamente el nombre del producto mencionado.
+- "saludo": cuando solamente saluda o inicia conversación.
+- "producto": cuando pregunta por uno o varios productos, precios,
+  presentaciones o disponibilidad.
+- "lista_precios": cuando solicita la lista completa de precios,
+  catálogo o todos los precios.
+- "otro": cualquier otro mensaje.
 
-Devuelve EXCLUSIVAMENTE JSON válido con esta estructura:
+REGLAS IMPORTANTES:
 
-{
-  "tipo": "saludo",
-  "producto": null
-}
+- Si el cliente menciona uno o varios productos, usa tipo "producto".
+- Extrae TODOS los productos mencionados.
+- Devuelve los nombres de los productos de forma simple.
+- No confundas un saludo acompañado de una consulta con "saludo".
+  Ejemplo:
+  "Hola, ¿cuánto cuesta el aguacate?"
+  debe ser "producto".
+- "Quiero precio de fresa, uva y durazno"
+  debe detectar los tres productos.
+- "¿Tienen limón y aguacate?"
+  debe detectar limón y aguacate.
+- Si no hay productos, devuelve productos como [].
 
-o:
+Devuelve EXCLUSIVAMENTE JSON válido.
+
+Ejemplo con un producto:
 
 {
   "tipo": "producto",
-  "producto": "aguacate"
+  "productos": ["aguacate"]
 }
 
-o:
+Ejemplo con varios:
 
 {
-  "tipo": "otro",
-  "producto": null
+  "tipo": "producto",
+  "productos": ["fresa", "uva", "durazno"]
 }
 
-o:
+Ejemplo saludo:
+
+{
+  "tipo": "saludo",
+  "productos": []
+}
+
+Ejemplo lista completa:
 
 {
   "tipo": "lista_precios",
-  "producto": null
+  "productos": []
+}
+
+Ejemplo otro:
+
+{
+  "tipo": "otro",
+  "productos": []
 }
 
 No escribas ninguna explicación fuera del JSON.
@@ -556,17 +582,24 @@ No escribas ninguna explicación fuera del JSON.
     resultado.output?.[0]?.content?.[0]?.text?.trim();
 
   try {
-    return JSON.parse(texto);
+    const intencion = JSON.parse(texto);
+
+    // Protección por si OpenAI devuelve algo inesperado
+    if (!Array.isArray(intencion.productos)) {
+      intencion.productos = [];
+    }
+
+    return intencion;
+
   } catch (error) {
     console.error("La IA no devolvió JSON válido:", texto);
 
     return {
       tipo: "otro",
-      producto: null,
+      productos: [],
     };
   }
 }
-
 async function generarRespuestaConIA(textoCliente, resultados) {
   const datosCatalogo = resultados.map((producto) => ({
     producto: producto.producto,
