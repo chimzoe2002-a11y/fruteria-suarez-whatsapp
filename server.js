@@ -734,15 +734,11 @@ async function procesarMensajeWhatsApp(body) {
 await guardarMensajeWhatsApp({
   conversacionId: conversacion.id,
   telefono: numeroCliente,
-  messageId: messageIdBot,
-  emisor: "bot",
-  contenido: respuestaCliente,
+  messageId: mensaje.id || null,
+  emisor: "cliente",
+  contenido: textoCliente,
   origen: "whatsapp",
 });
-
-await marcarMensajesPendientesComoAtendidos(
-  conversacion.id
-);
 
 await actualizarActividadConversacion(
   conversacion.id
