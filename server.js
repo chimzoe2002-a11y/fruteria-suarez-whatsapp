@@ -503,61 +503,53 @@ async function entenderMensajeConIA(textoCliente) {
       instructions: `
 Analiza el mensaje de un cliente de una frutería mexicana.
 
-Clasifica el mensaje en UNO de estos tipos:
+Clasifica el mensaje en uno de estos tipos:
 
-- "saludo": cuando solamente saluda o inicia conversación.
-- "producto": cuando pregunta por uno o varios productos, precios,
-  presentaciones o disponibilidad.
-- "lista_precios": cuando solicita la lista completa de precios,
-  catálogo o todos los precios.
+- "saludo": cuando el mensaje es principalmente un saludo y no contiene además una consulta.
+- "producto": cuando pregunta por uno o varios productos, precios, presentaciones o disponibilidad.
+- "lista_precios": cuando pide la lista completa de precios.
 - "otro": cualquier otro mensaje.
 
 REGLAS IMPORTANTES:
 
-- Si el cliente menciona uno o varios productos, usa tipo "producto".
-- Extrae TODOS los productos mencionados.
-- Devuelve los nombres de los productos de forma simple.
-- No confundas un saludo acompañado de una consulta con "saludo".
-  Ejemplo:
-  "Hola, ¿cuánto cuesta el aguacate?"
-  debe ser "producto".
-- "Quiero precio de fresa, uva y durazno"
-  debe detectar los tres productos.
-- "¿Tienen limón y aguacate?"
-  debe detectar limón y aguacate.
-- Si no hay productos, devuelve productos como [].
+- Si el cliente saluda y además pregunta por productos, clasifica como "producto".
+- Si menciona varios productos, extrae TODOS.
+- Devuelve los nombres de los productos sin cantidades ni unidades.
+- No ignores productos aunque aparezcan dentro de una oración larga.
+- "Hola, cuánto está la fresa" es producto, no saludo.
+- "Precio de fresa, uva y durazno" debe devolver los tres productos.
 
 Devuelve EXCLUSIVAMENTE JSON válido.
 
-Ejemplo con un producto:
-
-{
-  "tipo": "producto",
-  "productos": ["aguacate"]
-}
-
-Ejemplo con varios:
-
-{
-  "tipo": "producto",
-  "productos": ["fresa", "uva", "durazno"]
-}
-
-Ejemplo saludo:
+Ejemplo de saludo:
 
 {
   "tipo": "saludo",
   "productos": []
 }
 
-Ejemplo lista completa:
+Ejemplo de un producto:
+
+{
+  "tipo": "producto",
+  "productos": ["aguacate"]
+}
+
+Ejemplo de varios productos:
+
+{
+  "tipo": "producto",
+  "productos": ["fresa", "uva", "durazno"]
+}
+
+Ejemplo de lista completa:
 
 {
   "tipo": "lista_precios",
   "productos": []
 }
 
-Ejemplo otro:
+Ejemplo de otro:
 
 {
   "tipo": "otro",
@@ -565,8 +557,7 @@ Ejemplo otro:
 }
 
 No escribas ninguna explicación fuera del JSON.
-      `,
-
+`,
       input: textoCliente,
     }),
   });
@@ -743,11 +734,15 @@ async function procesarMensajeWhatsApp(body) {
 await guardarMensajeWhatsApp({
   conversacionId: conversacion.id,
   telefono: numeroCliente,
-  messageId: mensaje.id || null,
-  emisor: "cliente",
-  contenido: textoCliente,
+  messageId: messageIdBot,
+  emisor: "bot",
+  contenido: respuestaCliente,
   origen: "whatsapp",
 });
+
+await marcarMensajesPendientesComoAtendidos(
+  conversacion.id
+);
 
 await actualizarActividadConversacion(
   conversacion.id
@@ -857,31 +852,51 @@ INSTRUCCIONES:
 
     }
 
-    else if (
-      intencion.tipo === "producto" &&
-      intencion.producto
-    ) {
+   else if (
+  intencion.tipo === "producto" &&
+  Array.isArray(intencion.productos) &&
+  intencion.productos.length > 0
+) {
 
-      const resultados =
-        await buscarProducto(intencion.producto);
+  const resultados = [];
+  const noEncontrados = [];
 
-      if (resultados.length === 0) {
+  for (const nombreProducto of intencion.productos) {
 
-        respuestaCliente =
-          `Disculpa 😊 no encontré "${intencion.producto}" ` +
-          `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+    const encontrados =
+      await buscarProducto(nombreProducto);
 
-      } else {
-
-        respuestaCliente =
-          await generarRespuestaConIA(
-            textoConContexto,
-            resultados
-          );
-
-      }
-
+    if (encontrados.length === 0) {
+      noEncontrados.push(nombreProducto);
+    } else {
+      resultados.push(...encontrados);
     }
+
+  }
+
+  if (resultados.length === 0) {
+
+    respuestaCliente =
+      `Disculpa 😊 no encontré esos productos ` +
+      `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+
+  } else {
+
+    respuestaCliente =
+      await generarRespuestaConIA(
+        textoCliente,
+        resultados
+      );
+
+    if (noEncontrados.length > 0) {
+      respuestaCliente +=
+        `\n\nNo encontré en la lista: ${noEncontrados.join(", ")}.`;
+    }
+
+  }
+
+}
+    
 
     else {
 
@@ -1039,7 +1054,7 @@ async function responderPendientesAlRetomar(conversacion) {
       .map((m) => m.contenido)
       .join("\n");
 
-  const textoConContexto = `
+const textoConContexto = `
 HISTORIAL RECIENTE:
 
 ${historialTexto}
@@ -1055,7 +1070,6 @@ INSTRUCCIONES:
 - Usa el historial para comprender referencias.
 - No menciones que hubo un error técnico ni que estás leyendo una base de datos.
 `;
-
   const intencion =
     await entenderMensajeConIA(textoConContexto);
 
@@ -1073,30 +1087,50 @@ INSTRUCCIONES:
       "https://docs.google.com/spreadsheets/d/1QNznJKlgX5csiHNAVGeZtHal6yso-1n9YnK6oBK2ROQ/edit?usp=sharing";
 
   } else if (
-    intencion.tipo === "producto" &&
-    intencion.producto
-  ) {
+  intencion.tipo === "producto" &&
+  Array.isArray(intencion.productos) &&
+  intencion.productos.length > 0
+) {
 
-    const resultados =
-      await buscarProducto(intencion.producto);
+  const resultados = [];
+  const noEncontrados = [];
 
-    if (resultados.length === 0) {
+  for (const nombreProducto of intencion.productos) {
 
-      respuestaCliente =
-        `Disculpa 😊 no encontré "${intencion.producto}" ` +
-        `en nuestra lista de precios. ¿Buscas algún otro producto?`;
+    const encontrados =
+      await buscarProducto(nombreProducto);
 
+    if (encontrados.length === 0) {
+      noEncontrados.push(nombreProducto);
     } else {
-
-      respuestaCliente =
-        await generarRespuestaConIA(
-          textoConContexto,
-          resultados
-        );
-
+      resultados.push(...encontrados);
     }
 
+  }
+
+  if (resultados.length === 0) {
+
+    respuestaCliente =
+      "Disculpa 😊 no encontré esos productos en nuestra lista de precios.";
+
   } else {
+
+    respuestaCliente =
+      await generarRespuestaConIA(
+        mensajesPendientesTexto,
+        resultados
+      );
+
+    if (noEncontrados.length > 0) {
+      respuestaCliente +=
+        `\n\nNo encontré en la lista: ${noEncontrados.join(", ")}.`;
+    }
+
+  }
+
+}
+  
+  else {
 
     respuestaCliente =
       "Claro 😊, retomando tu mensaje anterior, ¿me puedes dar un poco más de detalle para ayudarte?";
