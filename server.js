@@ -4,8 +4,8 @@ const app = express();
 app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const WASSENGER_API_KEY = process.env.WASSENGER_API_KEY;
+const WASSENGER_NUMBER_ID = process.env.WASSENGER_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -450,40 +450,36 @@ async function buscarProducto(nombre) {
 
 
 // ======================================================
-// WHATSAPP
+// WHATSAPP - AHORA POR WASSENGER (COEXISTENCE)
 // ======================================================
 
 async function enviarMensajeWhatsApp(numeroDestino, texto) {
-  const url =
-    `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const url = "https://api.wassenger.com/v1/messages";
 
   const respuesta = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
       "Content-Type": "application/json",
+      "Token": WASSENGER_API_KEY,
     },
     body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: numeroDestino,
-      type: "text",
-      text: {
-        body: texto,
-      },
+      phone: numeroDestino.startsWith('+')? numeroDestino : `+${numeroDestino}`,
+      message: texto,
+      device: WASSENGER_NUMBER_ID
     }),
   });
 
   const resultado = await respuesta.json();
 
   if (!respuesta.ok) {
-    console.error("Error enviando WhatsApp:", resultado);
+    console.error("Error enviando WhatsApp por Wassenger:", resultado);
     throw new Error("No se pudo enviar el mensaje de WhatsApp");
   }
 
-  console.log("WhatsApp enviado correctamente:", resultado);
-
+  console.log("WhatsApp enviado por Wassenger:", resultado);
   return resultado;
 }
+
 
 
 // ======================================================
@@ -927,10 +923,8 @@ INSTRUCCIONES:
         respuestaCliente
       );
 
-    const messageIdBot =
-      resultadoEnvio?.messages?.[0]?.id || null;
-
-
+    const messageIdBot = resultadoEnvio?.data?.id || resultadoEnvio?.id || null;
+    
     // ==================================================
     // GUARDAR RESPUESTA DEL BOT EN SUPABASE
     // ==================================================
@@ -1139,9 +1133,7 @@ INSTRUCCIONES:
       respuestaCliente
     );
 
-  const messageIdBot =
-    resultadoEnvio?.messages?.[0]?.id || null;
-
+  const messageIdBot = resultadoEnvio?.data?.id || resultadoEnvio?.id || null;
   await guardarMensajeWhatsApp({
     conversacionId: conversacion.id,
     telefono: conversacion.telefono,
