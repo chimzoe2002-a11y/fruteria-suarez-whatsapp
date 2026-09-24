@@ -688,7 +688,42 @@ app.post("/webhook", (req, res) => {
     console.error("Error procesando mensaje:", error);
   });
 });
+// ======================================================
+// PARTE 2: WASSENGER - SOLO PARA RECIBIR (SEPARADO)
+// URL en Wassenger: https://fruteria-suarez.onrender.com/webhook/wassenger
+// En tu foto deja solo palomeado: message:in:new
+// ======================================================
+app.post("/webhook/wassenger", (req, res) => {
+  console.log("Webhook WASSENGER recibido:", JSON.stringify(req.body, null, 2));
+  res.sendStatus(200); // Contestamos rápido a Wassenger
 
+  const event = req.body.event;
+  const data = req.body.data;
+
+  // IMPORTANTE: Si no es mensaje entrante, lo ignoramos para no hacer loop
+  if (event !== 'message:in:new') return;
+  if (data?.fromMe === true) return;
+
+  // Adaptamos el formato de Wassenger al formato de Meta para reusar tu misma lógica
+  const bodyAdaptado = {
+    entry: [{
+      changes: [{
+        value: {
+          messages: [{
+            id: data.id,
+            from: data.fromNumber.replace('+',''), // Wassenger manda +521...
+            type: "text",
+            text: { body: data.body }
+          }]
+        }
+      }]
+    }]
+  };
+
+  procesarMensajeWhatsApp(bodyAdaptado).catch((error) => {
+    console.error("Error procesando mensaje de Wassenger:", error);
+  });
+});
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
