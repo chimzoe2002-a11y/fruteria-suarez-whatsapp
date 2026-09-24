@@ -557,7 +557,39 @@ No escribas ninguna explicación fuera del JSON.
       input: textoCliente,
     }),
   });
+// ======================================================
+// WHATSAPP - AHORA 100% DIRECTO POR META (GRATIS, SIN WASSENGER)
+// ======================================================
+const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
+const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
 
+async function enviarMensajeWhatsApp(numeroDestino, texto) {
+  const url = `https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`;
+
+  const respuesta = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${META_ACCESS_TOKEN}`,
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: numeroDestino,
+      type: "text",
+      text: { body: texto }
+    }),
+  });
+
+  const resultado = await respuesta.json();
+
+  if (!respuesta.ok) {
+    console.error("Error enviando WhatsApp por Meta:", resultado);
+    throw new Error("No se pudo enviar el mensaje de WhatsApp");
+  }
+
+  console.log("WhatsApp enviado por Meta:", resultado);
+  return resultado;
+}
   const resultado = await respuesta.json();
 
   if (!respuesta.ok) {
@@ -686,42 +718,6 @@ app.post("/webhook", (req, res) => {
 
   procesarMensajeWhatsApp(req.body).catch((error) => {
     console.error("Error procesando mensaje:", error);
-  });
-});
-// ======================================================
-// PARTE 2: WASSENGER - SOLO PARA RECIBIR (SEPARADO)
-// URL en Wassenger: https://fruteria-suarez.onrender.com/webhook/wassenger
-// En tu foto deja solo palomeado: message:in:new
-// ======================================================
-app.post("/webhook/wassenger", (req, res) => {
-  console.log("Webhook WASSENGER recibido:", JSON.stringify(req.body, null, 2));
-  res.sendStatus(200); // Contestamos rápido a Wassenger
-
-  const event = req.body.event;
-  const data = req.body.data;
-
-  // IMPORTANTE: Si no es mensaje entrante, lo ignoramos para no hacer loop
-  if (event !== 'message:in:new') return;
-  if (data?.fromMe === true) return;
-
-  // Adaptamos el formato de Wassenger al formato de Meta para reusar tu misma lógica
-  const bodyAdaptado = {
-    entry: [{
-      changes: [{
-        value: {
-          messages: [{
-            id: data.id,
-            from: data.fromNumber.replace('+',''), // Wassenger manda +521...
-            type: "text",
-            text: { body: data.body }
-          }]
-        }
-      }]
-    }]
-  };
-
-  procesarMensajeWhatsApp(bodyAdaptado).catch((error) => {
-    console.error("Error procesando mensaje de Wassenger:", error);
   });
 });
 async function procesarMensajeWhatsApp(body) {
