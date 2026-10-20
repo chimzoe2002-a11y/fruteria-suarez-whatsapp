@@ -4,10 +4,19 @@ const app = express();
 app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const WASSENGER_API_KEY = process.env.WASSENGER_API_KEY;
-const WASSENGER_NUMBER_ID = process.env.WASSENGER_NUMBER_ID;
+
+// META / WHATSAPP CLOUD API
+const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
+const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
+const WABA_ID = process.env.WABA_ID;
+
+// OPENAI
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// GOOGLE SHEETS
 const SHEET_ID = process.env.SHEET_ID;
+
+// SUPABASE
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 // ======================================================
@@ -454,29 +463,68 @@ async function buscarProducto(nombre) {
 // ======================================================
 
 async function enviarMensajeWhatsApp(numeroDestino, texto) {
-  const url = "https://api.wassenger.com/v1/messages";
+  const numeroLimpio = String(numeroDestino).replace(/[^\d]/g, "");
+
+  if (!META_ACCESS_TOKEN) {
+    throw new Error("Falta la variable META_ACCESS_TOKEN");
+  }
+
+  if (!META_PHONE_NUMBER_ID) {
+    throw new Error("Falta la variable META_PHONE_NUMBER_ID");
+  }
+
+  const url =
+    `https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`;
 
   const respuesta = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Token": WASSENGER_API_KEY,
+      Authorization: `Bearer ${META_ACCESS_TOKEN}`,
     },
     body: JSON.stringify({
-      phone: numeroDestino.startsWith('+')? numeroDestino : `+${numeroDestino}`,
-      message: texto,
-      device: WASSENGER_NUMBER_ID
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: numeroLimpio,
+      type: "text",
+      text: {
+        preview_url: false,
+        body: texto,
+      },
     }),
   });
 
-  const resultado = await respuesta.json();
+  const textoRespuesta = await respuesta.text();
 
-  if (!respuesta.ok) {
-    console.error("Error enviando WhatsApp por Wassenger:", resultado);
-    throw new Error("No se pudo enviar el mensaje de WhatsApp");
+  let resultado;
+
+  try {
+    resultado = textoRespuesta
+      ? JSON.parse(textoRespuesta)
+      : {};
+  } catch {
+    resultado = {
+      raw: textoRespuesta,
+    };
   }
 
-  console.log("WhatsApp enviado por Wassenger:", resultado);
+  if (!respuesta.ok) {
+    console.error(
+      "Error enviando mensaje por Meta:",
+      respuesta.status,
+      resultado
+    );
+
+    throw new Error(
+      `Meta WhatsApp API respondió ${respuesta.status}`
+    );
+  }
+
+  console.log(
+    "Mensaje enviado correctamente por Meta:",
+    resultado?.messages?.[0]?.id || "sin id"
+  );
+
   return resultado;
 }
 
