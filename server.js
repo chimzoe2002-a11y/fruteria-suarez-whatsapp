@@ -605,39 +605,6 @@ No escribas ninguna explicación fuera del JSON.
       input: textoCliente,
     }),
   });
-// ======================================================
-// WHATSAPP - AHORA 100% DIRECTO POR META (GRATIS, SIN WASSENGER)
-// ======================================================
-const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
-const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
-
-async function enviarMensajeWhatsApp(numeroDestino, texto) {
-  const url = `https://graph.facebook.com/v20.0/${META_PHONE_NUMBER_ID}/messages`;
-
-  const respuesta = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${META_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: numeroDestino,
-      type: "text",
-      text: { body: texto }
-    }),
-  });
-
-  const resultado = await respuesta.json();
-
-  if (!respuesta.ok) {
-    console.error("Error enviando WhatsApp por Meta:", resultado);
-    throw new Error("No se pudo enviar el mensaje de WhatsApp");
-  }
-
-  console.log("WhatsApp enviado por Meta:", resultado);
-  return resultado;
-}
   const resultado = await respuesta.json();
 
   if (!respuesta.ok) {
@@ -757,24 +724,56 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-
 app.post("/webhook", (req, res) => {
-  console.log("Webhook recibido");
 
-  // Contestamos inmediatamente a Meta
+  console.log("========== WEBHOOK META ==========");
+
+  const value =
+    req.body?.entry?.[0]?.changes?.[0]?.value;
+
+  console.log(
+    "Tipo de evento:",
+    req.body?.entry?.[0]?.changes?.[0]?.field
+  );
+
+  if (value?.messages?.length) {
+    console.log(
+      "Mensaje entrante:",
+      value.messages.map(m => ({
+        id: m.id,
+        type: m.type
+      }))
+    );
+  } else if (value?.statuses?.length) {
+    console.log(
+      "Actualización de estado:",
+      value.statuses[0]?.status
+    );
+  } else {
+    console.log("Evento sin mensaje entrante");
+  }
+
   res.sendStatus(200);
 
   procesarMensajeWhatsApp(req.body).catch((error) => {
     console.error("Error procesando mensaje:", error);
   });
+
 });
+
 async function procesarMensajeWhatsApp(body) {
   const mensaje =
     body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
   if (!mensaje) {
-    return;
-  }
+
+  console.log(
+    "Webhook recibido sin mensaje entrante."
+  );
+
+  return;
+
+}
 
   // Evitar procesar dos veces el mismo webhook durante esta ejecución
   if (mensaje.id && mensajeYaProcesado(mensaje.id)) {
@@ -1002,7 +1001,8 @@ INSTRUCCIONES:
         respuestaCliente
       );
 
-    const messageIdBot = resultadoEnvio?.data?.id || resultadoEnvio?.id || null;
+    const messageIdBot =
+  resultadoEnvio?.messages?.[0]?.id || null;
     
     // ==================================================
     // GUARDAR RESPUESTA DEL BOT EN SUPABASE
@@ -1212,7 +1212,8 @@ INSTRUCCIONES:
       respuestaCliente
     );
 
-  const messageIdBot = resultadoEnvio?.data?.id || resultadoEnvio?.id || null;
+  const messageIdBot =
+  resultadoEnvio?.messages?.[0]?.id || null;
   await guardarMensajeWhatsApp({
     conversacionId: conversacion.id,
     telefono: conversacion.telefono,
